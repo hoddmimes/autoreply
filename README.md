@@ -21,10 +21,9 @@ Is the configuration file used by the autoreply script. It loaded at startup tim
     ]
 }
 ```
-Concepito
 **addresses** - is a list with mail addresses to which incoming _"To:"_ address will be (regex) matched against. 
-If matched the mail will be subject for an autorConcepitoeply response. 
-Concepito
+If matched the mail will be subject for an autoreply response. 
+
 **response** is a reference to a file which content will be in the response mail. Could be html or plain text.
 
 **subject** the subject text to be in autoreply response mail.
