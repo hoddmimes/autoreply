@@ -24,9 +24,48 @@ def main():
     load_state()
 
     for server in credentials:
-        imap_server = connect_to_server( server["host"], server["port"], server["username"], server["password"], "INBOX")
+        host,port = get_host_port("IN", server)
+        imap_server = connect_to_server( host, port, server["username"], server["password"], "INBOX")
         msgs = get_unread_mails( imap_server)
         check_unread_mails( server, msgs )
+
+
+
+def get_host_port( direction: str, server : dict) -> tuple[str, int]:
+    if direction == 'IN':
+        if server["in_port"]:
+            port = server["in_port"]
+        else:
+            port = server["port"]
+
+        if server["in_host"]:
+            host = server["in_host"]
+        else:
+            host = server["host"]
+
+    if direction == 'OUT':
+        if server["out_port"]:
+            port = server["out_port"]
+        else:
+            port = server["port"]
+
+        if server["out_host"]:
+            host = server["out_host"]
+        else:
+            host = server["host"]
+    return host, port
+
+    if 'in_port' in server:
+        return server["in_port"]
+    return server["port"]
+
+
+def get_out_port( server : dict) -> int:
+    if 'out_port' in server:
+        return server["out_port"]
+    return server["port"]
+
+
 
 
 def load_credentials():
@@ -60,7 +99,7 @@ def load_state():
             print("Failed to load sautoreply_state.json, reason: " + str(e))
             exit(0)
     else:
-        state = dict()
+        state = []
 
 
 
@@ -122,10 +161,12 @@ def check_unread_mails( server: dict, msgs: [] ):
 def check_mail(server, msg_from: [], msg_to: []):
     to_addr = mail_to_me( msg_to )
     if to_addr:
-        from_addr = msg_from[0]
-        if not from_notified( to_addr, from_addr ):
-            if not exclude_address( from_addr ):
-                send_autoreply( server, from_addr, to_addr)
+        if within_out_of_office_time():
+            from_addr = msg_from[0]
+            if not from_notified( to_addr, from_addr ):
+                if not exclude_address( from_addr ):
+                    send_autoreply( server, from_addr, to_addr)
+                    add_notification(to_addr, from_addr)
 
 
 def load_message_file( filename: str ) -> str:
@@ -141,10 +182,11 @@ def load_message_file( filename: str ) -> str:
 def send_autoreply( server: dict, to_addr: str, from_addr: str):
     is_html = str(config["response"]).endswith("html")
     response = load_message_file(config["response"])
+    host,port = get_host_port("OUT", server)
 
 
     context = context = ssl._create_unverified_context()
-    with smtplib.SMTP(server["host"], server["port"]) as stmp_server:
+    with smtplib.SMTP(host, port) as stmp_server:
         stmp_server.ehlo()  # Can be omitted
         stmp_server.starttls(context=context)
         stmp_server.ehlo()  # Can be omitted
@@ -166,14 +208,27 @@ def send_autoreply( server: dict, to_addr: str, from_addr: str):
 
 def exclude_address( from_addr : str ) -> bool:
         for exclude_pattern in config["exclude"]:
-            if re.search( exclude_pattern, from_addr ):
+            if re.search( exclude_pattern, from_addr, re.IGNORECASE ):
                 return True
         return False
 
+def add_notification( to_addr: str, from_addr: str ):
+    now = datetime.now()
+    entry = dict()
+    entry["to"] = to_addr
+    entry["from"] = from_addr
+    entry["time"] = now.strftime('%Y-%m-%d %H:%M:%S')
+    global state
+    state.append( entry )
+
+    json_state = json.dumps(state)
+    with open("autoreply_state.json", "w") as outfile:
+        outfile.write(json_state)
+        outfile.flush()
+        outfile.close()
 
 
-def from_notified( to_addr: str, msg_from : [] ) -> bool:
-    from_addr = msg_from[0]
+def from_notified( to_addr: str, from_addr : str ) -> bool:
     for notify_item in state:
         if to_addr == notify_item["to"] and from_addr == notify_item["from"]:
             return within_notify_interval( notify_item["time"])
@@ -193,11 +248,18 @@ def within_notify_interval( notify_time_str : str ) -> bool:
     hh = delta_time_to_hours( delta_time )
     return hh < 24
 
+def within_out_of_office_time() -> bool:
+    start =  datetime.strptime(config["from"], '%Y-%m-%d %H:%M')
+    stop = datetime.strptime(config["to"], '%Y-%m-%d %H:%M')
+    now = datetime.now()
+
+    return  (now >= start and now <= stop)
+
 
 def mail_to_me( msg_to: [] ) -> str:
     for addr_pattern in config["addresses"]:
         for addr in msg_to:
-            if re.search( addr_pattern, addr  ):
+            if re.search( addr_pattern, addr, re.IGNORECASE  ):
                 return addr
     return None
 
@@ -211,6 +273,7 @@ def connect_to_server( host: str, port: int, username: str, password:str, mailbo
         return imap;
     except imaplib.IMAP4.error as e:
         print("Failed to connect to  " + host  + " on port " + str(port) + " as " + username + " reason: " + e.args[0].decode('utf-8') )
+        exit(0)
 
 
 def get_latest_mails( imap, count : int ) -> []:
